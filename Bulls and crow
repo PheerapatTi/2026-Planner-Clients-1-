@@ -1,0 +1,191 @@
+import random
+from typing import Dict, List, Optional
+
+class GameState:
+    """Manages the state of a multiplayer guessing game"""
+    
+    def __init__(self, game_id: str):
+        self.game_id = game_id
+        self.players = []  # List of player dictionaries
+        self.secret_numbers = {}  # player_name -> secret_number
+        self.guesses = {}  # player_name -> {target_player -> [guess_data]}
+        self.remaining_guesses = {}  # player_name -> {target_player -> count}
+        self.game_started = False
+        self.current_turn = 0
+        self.game_over = False
+        self.winner = None
+        
+    def add_player(self, player_name: str):
+        """Add a new player to the game"""
+        if len(self.players) >= 4:
+            raise ValueError("Game is full")
+        
+        player_data = {
+            'name': player_name,
+            'secret_set': False,
+            'total_correct_guesses': 0,
+            'numbers_cracked': []
+        }
+        
+        self.players.append(player_data)
+        self.guesses[player_name] = {}
+        self.remaining_guesses[player_name] = {}
+        
+        # Initialize guesses for this player against all other players
+        for other_player in self.players:
+            if other_player['name'] != player_name:
+                self.guesses[player_name][other_player['name']] = []
+                self.remaining_guesses[player_name][other_player['name']] = 5
+                
+                # Also initialize the reverse
+                if other_player['name'] not in self.guesses:
+                    self.guesses[other_player['name']] = {}
+                    self.remaining_guesses[other_player['name']] = {}
+                
+                self.guesses[other_player['name']][player_name] = []
+                self.remaining_guesses[other_player['name']][player_name] = 5
+    
+    def set_secret_number(self, player_name: str, secret_number: str):
+        """Set a player's secret number"""
+        self.secret_numbers[player_name] = secret_number
+        
+        # Update player's secret_set status
+        for player in self.players:
+            if player['name'] == player_name:
+                player['secret_set'] = True
+                break
+        
+        # Check if game can start
+        if self.all_secrets_set() and len(self.players) >= 2:
+            self.game_started = True
+    
+    def all_secrets_set(self) -> bool:
+        """Check if all players have set their secret numbers"""
+        return len(self.secret_numbers) == len(self.players)
+    
+    def make_guess(self, guesser: str, target: str, guess: str) -> Dict:
+        """Make a guess and return the result"""
+        if not self.game_started:
+            raise ValueError("Game hasn't started yet")
+        
+        if self.game_over:
+            raise ValueError("Game is over")
+        
+        if guesser == target:
+            raise ValueError("You cannot guess your own number")
+        
+        if self.remaining_guesses[guesser][target] <= 0:
+            raise ValueError("No more guesses remaining for this player")
+        
+        if target not in self.secret_numbers:
+            raise ValueError("Target player hasn't set their secret number")
+        
+        # Check the guess
+        result = GameLogic.check_guess(guess, self.secret_numbers[target])
+        
+        # Store the guess
+        guess_data = {
+            'guess': guess,
+            'result': result,
+            'correct_positions': result['correct_positions']
+        }
+        
+        self.guesses[guesser][target].append(guess_data)
+        self.remaining_guesses[guesser][target] -= 1
+        
+        # Update player stats
+        for player in self.players:
+            if player['name'] == guesser:
+                player['total_correct_guesses'] += len(result['correct_positions'])
+                
+                # Check if this guess cracked the number
+                if len(result['correct_positions']) == 4:
+                    if target not in player['numbers_cracked']:
+                        player['numbers_cracked'].append(target)
+                break
+        
+        # Check for win condition
+        self.check_win_condition()
+        
+        return result
+    
+    def check_win_condition(self):
+        """Check if any player has won the game"""
+        for player in self.players:
+            # A player wins if they've cracked all other players' numbers
+            if len(player['numbers_cracked']) == len(self.players) - 1:
+                self.game_over = True
+                self.winner = player['name']
+                return
+        
+        # Also check if all guesses are exhausted
+        all_exhausted = True
+        for guesser in self.remaining_guesses:
+            for target in self.remaining_guesses[guesser]:
+                if self.remaining_guesses[guesser][target] > 0:
+                    all_exhausted = False
+                    break
+            if not all_exhausted:
+                break
+        
+        if all_exhausted:
+            self.game_over = True
+            # Find player with most correct guesses
+            max_correct = max(player['total_correct_guesses'] for player in self.players)
+            winners = [player for player in self.players if player['total_correct_guesses'] == max_correct]
+            if len(winners) == 1:
+                self.winner = winners[0]['name']
+            else:
+                self.winner = "Tie"
+    
+    def restart_game(self):
+        """Restart the game while keeping the same players"""
+        self.secret_numbers = {}
+        self.guesses = {}
+        self.remaining_guesses = {}
+        self.game_started = False
+        self.current_turn = 0
+        self.game_over = False
+        self.winner = None
+        
+        # Reset player data
+        for player in self.players:
+            player['secret_set'] = False
+            player['total_correct_guesses'] = 0
+            player['numbers_cracked'] = []
+        
+        # Reinitialize guesses
+        for player in self.players:
+            player_name = player['name']
+            self.guesses[player_name] = {}
+            self.remaining_guesses[player_name] = {}
+            
+            for other_player in self.players:
+                if other_player['name'] != player_name:
+                    self.guesses[player_name][other_player['name']] = []
+                    self.remaining_guesses[player_name][other_player['name']] = 5
+
+
+class GameLogic:
+    """Static methods for game logic"""
+    
+    @staticmethod
+    def validate_number(number: str) -> bool:
+        """Validate that a number is a 4-digit string"""
+        return len(number) == 4 and number.isdigit()
+    
+    @staticmethod
+    def check_guess(guess: str, secret: str) -> Dict:
+        """Check a guess against the secret number"""
+        correct_positions = []
+        
+        for i in range(4):
+            if guess[i] == secret[i]:
+                correct_positions.append(i)
+        
+        return {
+            'correct_positions': correct_positions,
+            'correct_count': len(correct_positions)
+        }
+
+
